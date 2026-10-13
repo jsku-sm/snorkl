@@ -11,10 +11,12 @@ import streamlit as st
 
 from think_app.config import load_settings
 from think_app.courses import CLASSES, COLORS, CourseManager
+from think_app.classroom_ui import course_detail, shared_student
+from think_app.design import style_page, sidebar, introduction, guide, section
 from think_app.storage import AppError, GitHubStore, LocalStore, MemoryStore
 
 
-st.set_page_config(page_title="수업", page_icon="📚", layout="wide")
+st.set_page_config(page_title="Student Insight Lab · 수업", page_icon="✏️", layout="wide")
 
 
 @st.cache_resource(show_spinner=False)
@@ -44,28 +46,6 @@ def get_store(settings):
     )
 
 
-def style_page():
-    st.markdown(
-        """
-        <style>
-        .stApp { background: #f5f4f7; color: #171923; }
-        .block-container { max-width: 1440px; padding-top: 2rem; }
-        h1, h2, h3 { letter-spacing: -.035em; }
-        div.stButton > button { border-radius: 9px; min-height: 42px; }
-        div.stButton > button[kind="primary"] {
-            background: #6948f5; border-color: #6948f5; color: white;
-        }
-        .course-row {
-            border-top: 1px solid #e9e7ec; padding: 16px 0;
-        }
-        .course-title { font-size: 1.05rem; font-weight: 700; }
-        .course-meta { color: #777783; font-size: .9rem; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def app_url(course_id: str) -> str:
     context_url = st.context.url
     parts = urlsplit(context_url)
@@ -83,7 +63,7 @@ def formatted_date(value: str) -> str:
         return value
 
 
-def share_view(manager: CourseManager, course_id: str):
+def share_view(manager: CourseManager, course_id: str, settings):
     course = manager.get(course_id)
     if not course:
         st.error("공유한 수업을 찾을 수 없습니다. 삭제되었거나 보관된 수업일 수 있습니다.")
@@ -92,9 +72,9 @@ def share_view(manager: CourseManager, course_id: str):
             st.rerun()
         return
     st.title(course["title"])
-    st.caption("수업 공유")
+    st.caption("학생 활동 공간 · 수업 공유")
     st.write("참여할 수 있는 대상: " + ", ".join(course["classes"]))
-    st.info("선생님이 공유한 수업 페이지입니다.")
+    shared_student(manager.store, course, settings)
     if st.button("수업 목록으로"):
         st.query_params.clear()
         st.rerun()
@@ -104,7 +84,7 @@ def render_share(course: dict):
     st.subheader("수업 공유")
     try:
         url = app_url(course["id"])
-        st.caption("이 주소를 공유하면 수업 정보를 볼 수 있습니다.")
+        st.caption("이 주소에서 학생이 학번과 이름을 입력하고 활동에 참여할 수 있습니다.")
         st.code(url, language=None)
         qr = qrcode.make(url)
         image = BytesIO()
@@ -117,6 +97,7 @@ def render_share(course: dict):
 def create_form(manager: CourseManager):
     with st.form("create_course"):
         title = st.text_input("수업 이름", max_chars=120)
+        st.caption("‘데스모스’ 또는 ‘Desmos’가 포함된 이름은 그래프 작업 화면으로 바로 연결됩니다.")
         color = st.color_picker("수업 이름 앞에 표시할 색상", value=COLORS[0])
         selected_classes = st.multiselect("참여할 수 있는 대상", CLASSES, default=[CLASSES[0]])
         submitted = st.form_submit_button("수업 만들기", type="primary")
@@ -209,15 +190,20 @@ def active_courses(manager: CourseManager):
     if st.session_state.get("show_create_form"):
         create_form(manager)
 
-    st.markdown("**이름**　　　　　　　　　　　　　　　　　　　　　　**마지막 업데이트**")
+    if not courses:
+        st.info("첫 수업을 만들어보세요. 수업 이름을 ‘데스모스’로 정하면 그래프 탐구를 바로 시작할 수 있습니다.")
+    else:
+        name_header, updated_header, _ = st.columns([4.6, 2.1, 2.1])
+        name_header.caption("수업 이름 · 참여 학급")
+        updated_header.caption("마지막 업데이트")
     for course in courses:
         name, updated, share, edit, menu = st.columns([4.6, 2.1, 0.7, 0.7, 0.7])
-        name.markdown(
-            f'<div class="course-title"><span style="color:{course["color"]}">●</span> '
-            f'{html.escape(course["title"])}</div><div class="course-meta">'
-            f'{html.escape(", ".join(course["classes"]))}</div>',
-            unsafe_allow_html=True,
-        )
+        if name.button(course["title"], key="open_course_" + course["id"], use_container_width=True):
+            st.session_state.selected_course = course["id"]
+            st.session_state.pop("selected_activity", None)
+            st.session_state.pop("show_guide", None)
+            st.rerun()
+        name.markdown(f'<span style="color:{course["color"]}">●</span> ' + html.escape(", ".join(course["classes"])), unsafe_allow_html=True)
         updated.markdown(formatted_date(course["updated"]))
         if share.button("공유", key="share_" + course["id"], help="수업 링크와 QR 코드"):
             st.session_state.sharing_course = course["id"]
@@ -273,12 +259,26 @@ def main():
         manager = CourseManager(store)
         course_id = st.query_params.get("course_id")
         if course_id:
-            share_view(manager, course_id)
+            sidebar(settings, manager.get(course_id), student=True)
+            share_view(manager, course_id, settings)
             return
-        st.title("수업")
+        selected = st.session_state.get("selected_course")
+        course = manager.get(selected) if selected else None
+        sidebar(settings, course)
+        if st.session_state.get("show_guide"):
+            guide()
+            return
+        if selected:
+            if course:
+                course_detail(store, course, settings)
+                return
+            st.session_state.pop("selected_course", None)
+        introduction()
         if settings.mode == "demo":
             st.caption("체험 모드 · 수업은 앱 프로세스가 유지되는 동안 임시 저장됩니다.")
-        st.warning("로그인 없이 운영됩니다. 배포된 앱에 접근할 수 있는 사용자는 수업을 수정하거나 삭제할 수 있습니다.")
+        with st.expander("운영 안내"):
+            st.caption("현재 앱은 로그인 없이 운영됩니다. 앱 접근 권한이 있는 사용자는 수업 관리 기능을 사용할 수 있습니다.")
+        section("01", "함께 탐구할 수업")
         current_tab, archive_tab = st.tabs(["현재 진행 중", "보관됨"])
         with current_tab:
             active_courses(manager)

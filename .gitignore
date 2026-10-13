@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+.streamlit/secrets.toml
+.think_data/
+.env
+.env.local

@@ -77,7 +77,7 @@ class CourseManager:
         load_archive = getattr(self.store, "get_course_archive", None)
         if load_archive is None:
             raise AppError("GitHub 보관 파일을 불러오려면 THINK_MODE = \"github\"로 설정하세요.")
-        course = load_archive(archive_id)
+        course = load_archive(archive_id)["course"]
         values = self._validate(course.get("title"), course.get("color"), course.get("classes"))
         course_id = course.get("id")
         if not isinstance(course_id, str) or not re.fullmatch(r"[a-f0-9]{32}", course_id):

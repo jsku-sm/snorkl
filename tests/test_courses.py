@@ -43,7 +43,7 @@ class ArchiveGitHub:
 
     def request(self, method, url, timeout, **kwargs):
         if url.endswith("/contents/think-learning-v1/course-archives") and method == "GET":
-            listing = [{"name": name} for name in self.files]
+            listing = [{"name": name.rsplit("/", 1)[-1]} for name in self.files if "/course-archives/" in name]
             return SimpleNamespace(status_code=200, json=lambda: listing)
         if "/contents/" in url and method == "GET":
             path = url.split("/contents/", 1)[1]
@@ -76,7 +76,7 @@ def test_github_course_archive_round_trip_and_restore():
     assert manager.get(course_id) is None
     archive_files = [path for path in session.files if "course-archives/" in path]
     assert len(archive_files) == 1
-    assert b"보관과 복원" not in session.files[archive_files[0]]
+    assert "보관과 복원".encode("utf-8") not in session.files[archive_files[0]]
 
     archives = manager.list_archives()
     assert len(archives) == 1

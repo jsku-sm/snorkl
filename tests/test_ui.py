@@ -1,7 +1,4 @@
-from pathlib import Path
 from streamlit.testing.v1 import AppTest
-
-APP = str(Path(__file__).resolve().parents[1] / "app.py")
 
 
 def button(at,label):
@@ -9,7 +6,7 @@ def button(at,label):
 
 
 def test_student_submits_twice_teacher_sees_and_reviews():
-    at=AppTest.from_file(APP,default_timeout=20).run()
+    at=AppTest.from_string("from think_app.ui import run\nrun()",default_timeout=20).run()
     assert not at.exception
     button(at,"학생으로 체험하기").click().run()
     assert not at.exception
@@ -33,7 +30,7 @@ def test_student_submits_twice_teacher_sees_and_reviews():
 
 
 def test_teacher_creates_assigns_and_student_sees_task():
-    at=AppTest.from_file(APP,default_timeout=20).run()
+    at=AppTest.from_string("from think_app.ui import run\nrun()",default_timeout=20).run()
     button(at,"교사로 체험하기").click().run()
     at.radio[0].set_value("새 과제 만들기").run()
     at.text_input[0].input("두 직선의 평행")
