@@ -17,7 +17,7 @@ from .storage import AppError, GitHubStore, LocalStore
 from .ui import board
 from .media import MODES, activity_mode, validate_audio, validated_graph
 from .design import section
-from .model_answers import render_model_answer
+from .model_answers import render_model_answer, reference_image_key
 from .timer_ui import teacher_timer_controls, student_timer
 from .uploads import UploadedFiles
 
@@ -96,7 +96,7 @@ def activity_form(room, course_id, task=None, ai=None):
                             format_func=MODES.get, key=form_key + "_mode")
         st.caption("활동 이름에 ‘데스모스’ 또는 ‘Desmos’를 입력하면 그래프 모드로 저장됩니다.")
         prompt = st.text_area("학생에게 제시할 문제", value=task.get("prompt", ""), max_chars=10000, key=form_key + "_prompt")
-        expected_key = render_model_answer(task, ai, form_key)
+        expected_key = render_model_answer(task, ai, form_key, room=room, course_id=course_id)
         expected = st.text_area("모범답안", max_chars=10000, key=expected_key)
         criteria = st.text_area("평가 기준 · 한 줄에 하나", value="\n".join(task.get("criteria", [])), key=form_key + "_criteria")
         options = st.text_area("퀴즈 선택지 · 한 줄에 하나", value="\n".join(task.get("quiz_options", [])),
@@ -126,7 +126,8 @@ def activity_form(room, course_id, task=None, ai=None):
                 room.save_activity(course_id, title, prompt, expected, [c.strip() for c in criteria.splitlines() if c.strip()],
                                    maximum, start.isoformat(), end.isoformat() if end else None, task.get("id"),
                                    mode, [o.strip() for o in options.splitlines() if o.strip()],
-                                   duration_minutes=None if task.get("timer_started_at") else duration)
+                                   duration_minutes=None if task.get("timer_started_at") else duration,
+                                   expected_images=st.session_state.get(reference_image_key(form_key), []))
             except AppError as error:
                 st.error(str(error))
             else:
@@ -187,7 +188,7 @@ def attempt_view(room, attempt, ai, teacher=True):
         st.caption(attempt["created"].replace("T", " "))
     with right:
         feedback_view(attempt)
-        if teacher and ai.available and attempt["consent"] and not attempt["feedback"]:
+        if teacher and ai.available and attempt["consent"] and not attempt["feedback"] and not attempt["activity_snapshot"].get("expected_images"):
             if st.button("AI 분석하기", key="evaluate_" + attempt["id"]):
                 with st.spinner("모범답안과 비교해 분석하고 있습니다…"):
                     room.evaluate(attempt["id"], ai)
@@ -241,7 +242,10 @@ def student_preview(room, course, task, ai, identity=None, editor_key=None, comp
                                    help="캡처한 PNG 또는 JPG 파일을 올리세요. 학번과 이름을 입력한 파일은 업로드 즉시 저장됩니다.")
         upload_ids, uploads_saved = answer_uploads(room, task, student_id, name, class_id, preview, key, uploads)
         text = st.text_area("나의 답안", max_chars=12000, key=key + "_text")
-        consent = st.checkbox("AI 피드백 받기 · 답안을 OpenAI에 전송", disabled=not ai.available, key=key + "_consent")
+        ai_feedback_available = ai.available and not task.get("expected_images")
+        consent = st.checkbox("AI 피드백 받기 · 답안을 OpenAI에 전송", disabled=not ai_feedback_available,
+                              key=key + "_consent", help="이미지 모범답안이 첨부된 활동은 교사가 직접 평가합니다.")
+        consent = bool(consent and ai_feedback_available)
         audio = st.audio_input("목소리로 설명하기 · 2분 이내", sample_rate=16000, key=key + "_audio")
         raw_audio = audio.getvalue() if audio else None
         audio_hash = hashlib.sha256(raw_audio).hexdigest() if raw_audio else ""

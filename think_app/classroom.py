@@ -14,6 +14,7 @@ from .service import safe_csv
 from .storage import AppError, student_submission_path
 from .media import MODES, activity_mode, validate_audio, validated_graph
 from .uploads import owned_uploads
+from .reference_images import owned_reference_images
 
 STATUSES = ["진행 중", "보기만 가능", "숨김"]
 GRADES = ["탁월", "성취", "발전 중", "성장 중"]
@@ -101,8 +102,9 @@ class Classroom:
         return self.store.transaction(change)
 
     def save_activity(self, course_id, title, prompt, expected, criteria, max_attempts, start, end, aid=None,
-                      mode="writing", quiz_options=None, duration_minutes=None):
-        if not all(isinstance(v, str) and v.strip() for v in (title, prompt, expected)) or not criteria:
+                      mode="writing", quiz_options=None, duration_minutes=None, expected_images=None):
+        if (not all(isinstance(v, str) and v.strip() for v in (title, prompt)) or
+                not isinstance(expected, str) or not criteria):
             raise AppError("활동 이름, 문제, 모범답안과 평가 기준을 모두 입력하세요.")
         if len(title) > 120 or max(len(prompt), len(expected)) > 10000 or not 1 <= max_attempts <= 10:
             raise AppError("입력 길이 또는 최대 시도 횟수를 확인하세요.")
@@ -128,11 +130,20 @@ class Classroom:
             old = activities.get(aid, {})
             if old and old["course_id"] != course_id:
                 raise AppError("활동의 수업이 일치하지 않습니다.")
+            references = owned_reference_images(state,
+                old.get("expected_images", []) if expected_images is None else expected_images, course_id)
+            if not expected.strip() and not references:
+                raise AppError("모범답안 내용을 입력하거나 모범답안 이미지를 첨부하세요.")
+            for reference in references:
+                raw = self.store.get_blob(reference["blob_ref"])
+                if not raw or len(raw) > 600000 or hashlib.sha256(raw).hexdigest() != reference["sha256"]:
+                    raise AppError("저장된 모범답안 이미지를 확인할 수 없습니다. 다시 업로드하세요.")
             duration = old.get("duration_minutes", 0) if duration_minutes is None else duration_minutes
             if old.get("timer_started_at") and duration != old.get("duration_minutes", 0):
                 raise AppError("평가 시작 후에는 평가 타이머에서 남은 시간을 조정하세요.")
             activities[aid] = dict(old, id=aid, course_id=course_id, title=title.strip(), prompt=prompt.strip(),
                 expected=expected.strip(), criteria=criteria, max_attempts=max_attempts, start=start, end=end,
+                expected_images=references,
                 mode=mode, quiz_options=quiz_options if mode == "quiz" else [],
                 status=old.get("status", "진행 중"), created=old.get("created", now()), duration_minutes=duration)
         self.store.transaction(change)
@@ -308,8 +319,9 @@ class Classroom:
             current = state.get("course_activities", {}).get(aid)
             if not current or not self._can_submit(current):
                 raise AppError("현재 제출할 수 없는 활동입니다.")
-            if any(task.get(field) != current.get(field) for field in
-                   ("prompt", "expected", "criteria", "mode", "quiz_options")):
+            if (any(task.get(field) != current.get(field) for field in
+                    ("prompt", "expected", "criteria", "mode", "quiz_options")) or
+                    task.get("expected_images", []) != current.get("expected_images", [])):
                 raise AppError("활동 내용이 변경되었습니다. 새 문제를 확인한 뒤 다시 제출하세요.")
             course = state.get("courses", {}).get(current["course_id"])
             if not course or class_id not in course["classes"]:
@@ -336,6 +348,8 @@ class Classroom:
         attempt = self.store.read()["course_attempts"][attempt_id]
         if not attempt["consent"]:
             raise AppError("학생이 AI 피드백 사용에 동의하지 않았습니다.")
+        if attempt["activity_snapshot"].get("expected_images"):
+            raise AppError("모범답안 이미지가 첨부된 활동은 교사가 직접 평가해 주세요. 현재 AI 평가는 이미지 모범답안을 비교하지 않습니다.")
         if not ai.available:
             raise AppError("AI 연결이 설정되지 않았습니다. 답안은 저장되었습니다.")
         if attempt.get("audio") and not attempt.get("transcript"):

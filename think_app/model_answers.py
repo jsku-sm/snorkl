@@ -1,5 +1,6 @@
 """Bring teacher-reviewed reference answers into the editable activity answer."""
 import base64
+import hashlib
 import io
 from pathlib import Path
 import re
@@ -12,12 +13,14 @@ import streamlit as st
 
 from .ai import normalized_image
 from .storage import AppError
+from .image_search import google_images_url
+from .reference_images import ReferenceImages
 
 
 MAX_ANSWER_CHARS = 10000
 MAX_FILE_BYTES = 10_000_000
-FILE_TYPES = ["txt", "md", "pdf", "docx", "png", "jpg", "jpeg"]
-IMAGE_TYPES = {".png", ".jpg", ".jpeg"}
+FILE_TYPES = ["txt", "md", "pdf", "docx", "png", "jpg", "jpeg", "webp"]
+IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
 WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 MATH_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
 
@@ -266,21 +269,74 @@ def search_model_answer(query, ai):
     return {"text": answer_text(text), "sources": sources}
 
 
-def render_model_answer(task, ai, form_key):
+def reference_image_key(form_key):
+    return form_key + "_expected_images"
+
+
+def attach_reference_files(room, course_id, form_key, uploads, source_url="", title="", page_url=""):
+    """Store teacher-selected images without converting them to AI text."""
+    key = reference_image_key(form_key)
+    current = list(st.session_state.get(key, []))
+    if any(len(upload.getvalue()) > MAX_FILE_BYTES for upload in uploads):
+        raise AppError("모범답안 파일은 10MB 이하로 올려주세요.")
+    files = [(upload, hashlib.sha256(upload.getvalue()).hexdigest()) for upload in uploads]
+    existing = {image["original_sha256"] for image in current}
+    if len(current) + len({digest for _, digest in files} - existing) > 3:
+        raise AppError("모범답안 이미지는 최대 3개까지 첨부하세요.")
+    service = ReferenceImages(room.store)
+    for upload, digest in files:
+        if digest in existing:
+            continue
+        saved = service.save(course_id, upload.getvalue(), upload.name,
+                             source_url=source_url, title=title, page_url=page_url)
+        current.append(saved)
+        existing.add(digest)
+        st.session_state[key] = current
+    return current
+
+
+def render_reference_images(room, course_id, form_key):
+    service = ReferenceImages(room.store)
+    key = reference_image_key(form_key)
+    for image in list(st.session_state.get(key, [])):
+        try:
+            st.image(service.read(image, course_id), caption=image["filename"], use_container_width=True)
+            if image.get("source_url"):
+                st.link_button("이미지 출처 보기", image["source_url"])
+            st.download_button("모범답안 이미지 원본 내려받기", room.store.get_blob(image["original_ref"]),
+                               file_name=image["filename"], mime=image["original_mime"],
+                               key=form_key + "_reference_download_" + image["id"])
+            if st.button("이미지 제거 · " + image["filename"], key=form_key + "_reference_remove_" + image["id"]):
+                st.session_state[key] = [item for item in st.session_state[key] if item["id"] != image["id"]]
+                st.rerun()
+        except AppError as error:
+            st.error(str(error))
+
+
+def render_model_answer(task, ai, form_key, room=None, course_id=None):
     """Render before the answer text area; return that area's session-state key."""
     expected_key = form_key + "_expected"
     draft_key = form_key + "_answer_import_draft"
     metadata_key = form_key + "_answer_import_metadata"
     available = bool(ai and ai.available)
     st.session_state.setdefault(expected_key, task.get("expected", ""))
+    st.session_state.setdefault(reference_image_key(form_key), list(task.get("expected_images", [])))
     with st.expander("모범답안 가져오기 · 파일 / 웹 검색"):
         st.caption("가져온 내용을 확인하고 적용한 뒤 모범답안을 수정할 수 있습니다. 활동 저장을 누르면 최종 저장됩니다.")
         file_tab, web_tab = st.tabs(["파일 업로드", "웹 검색"])
         with file_tab:
             upload = st.file_uploader("모범답안 파일", type=FILE_TYPES, key=form_key + "_answer_file",
-                                      help="10MB 이하 · TXT/MD, 텍스트 PDF, DOCX, PNG/JPG · HWP는 PDF 또는 DOCX로 변환해 주세요.")
+                                      help="10MB 이하 · TXT/MD, 텍스트 PDF, DOCX, PNG/JPG/WebP · HWP는 PDF 또는 DOCX로 변환해 주세요.")
             st.caption("PDF·Word의 수식과 표는 가져온 내용을 확인해 주세요. 이미지 읽기는 AI가 연결되어 있을 때 OpenAI로 전송합니다.")
-            if st.button("파일 내용 읽기", disabled=upload is None, key=form_key + "_read_answer_file"):
+            is_image = upload is not None and Path(upload.name).suffix.lower() in IMAGE_TYPES
+            if is_image and room is not None:
+                if st.button("모범답안 이미지로 첨부", key=form_key + "_attach_answer_file"):
+                    try:
+                        attach_reference_files(room, course_id, form_key, [upload])
+                        st.success("모범답안 이미지를 첨부했습니다. 활동 저장을 눌러 적용하세요.")
+                    except AppError as error:
+                        st.error(str(error))
+            if st.button("파일 내용 읽기", disabled=upload is None or (is_image and not available), key=form_key + "_read_answer_file"):
                 try:
                     with st.spinner("모범답안 파일을 읽고 있습니다…"):
                         text = extract_model_answer(upload.name, upload.getvalue(), ai)
@@ -292,19 +348,43 @@ def render_model_answer(task, ai, form_key):
             initial_query = task.get("prompt", "")
             if len(initial_query) > 2000:
                 initial_query = task.get("title", "")
-            query = st.text_area("모범답안 검색어 또는 문제", value=initial_query, max_chars=2000,
-                                 key=form_key + "_answer_query", placeholder="예: 이차함수 y=x²-4x+3의 꼭짓점 구하기 풀이")
-            st.caption("검색어를 OpenAI로 전송해 출처가 있는 답안 초안을 찾습니다. 정답과 출처는 교사가 확인해 주세요.")
-            if not available:
-                st.info("웹 검색과 이미지 읽기는 교사의 AI 연결 후 사용할 수 있습니다. 문서 파일 업로드는 바로 사용할 수 있습니다.")
-            if st.button("웹에서 모범답안 찾기", disabled=not available or not query.strip(), key=form_key + "_search_answer"):
+            image_query = initial_query if len(initial_query) <= 300 else task.get("title", "")
+            query = st.text_input("이미지 검색어", value=image_query, max_chars=300,
+                                  key=form_key + "_google_query", placeholder="예: 이차함수 그래프 모범풀이")
+            search_url = google_images_url(query) if query.strip() else "https://www.google.com/search?udm=2"
+            st.link_button("Google 이미지에서 검색", search_url, disabled=not query.strip())
+            st.caption("새 탭의 Google 이미지에서 원하는 이미지를 선택해 파일로 저장하고, 아래에 업로드하세요. 검색 탭을 열어도 작성 중인 활동은 유지됩니다.")
+            image_files = st.file_uploader("검색한 이미지 업로드", type=["png", "jpg", "jpeg", "webp"],
+                                           accept_multiple_files=True, key=form_key + "_google_files",
+                                           help="모범답안에 첨부할 이미지 · 최대 3개 · 파일당 10MB 이하")
+            source_url = st.text_input("이미지 출처 주소 · 선택", max_chars=4000, key=form_key + "_google_source",
+                                       placeholder="선택한 이미지가 있는 원본 페이지 주소")
+            if st.button("선택한 이미지 첨부", disabled=not image_files or room is None, key=form_key + "_attach_google_images"):
                 try:
-                    with st.spinner("웹 자료에서 모범답안을 찾고 있습니다…"):
-                        draft = search_model_answer(query, ai)
-                    st.session_state[draft_key] = draft["text"]
-                    st.session_state[metadata_key] = {"label": "웹 검색: " + query, "sources": draft["sources"]}
+                    with st.spinner("선택한 이미지를 보관하고 있습니다…"):
+                        attach_reference_files(room, course_id, form_key, image_files,
+                                               source_url=source_url, title=query, page_url=search_url)
+                    st.success("선택한 이미지를 모범답안에 첨부했습니다. 활동 저장을 눌러 적용하세요.")
                 except AppError as error:
                     st.error(str(error))
+            st.caption("Google 이미지 검색과 이미지 첨부는 API 키나 AI 연결 없이 사용할 수 있습니다.")
+            with st.expander("AI로 풀이 글 검색 · 선택"):
+                text_query = st.text_area("모범답안 검색어 또는 문제", value=initial_query, max_chars=2000,
+                                          key=form_key + "_answer_query")
+                st.caption("풀이 글 검색과 이미지의 글 읽기는 AI 연결이 필요하며 입력한 자료를 OpenAI로 전송합니다.")
+                if st.button("웹에서 모범답안 찾기", disabled=not available or not text_query.strip(), key=form_key + "_search_answer"):
+                    try:
+                        with st.spinner("웹 자료에서 모범답안을 찾고 있습니다…"):
+                            draft = search_model_answer(text_query, ai)
+                        st.session_state[draft_key] = draft["text"]
+                        st.session_state[metadata_key] = {"label": "웹 검색: " + text_query, "sources": draft["sources"]}
+                    except AppError as error:
+                        st.error(str(error))
+        if room is not None:
+            render_reference_images(room, course_id, form_key)
+            if st.session_state.get(reference_image_key(form_key)):
+                st.caption("이미지가 첨부된 모범답안은 글을 비워도 저장할 수 있습니다. 학생 화면에는 모범답안 이미지가 표시되지 않습니다.")
+                st.caption("이미지 모범답안은 교사가 직접 확인·평가합니다. 현재 AI 자동 평가는 이미지 모범답안을 비교하지 않습니다.")
         if metadata_key in st.session_state:
             metadata = st.session_state[metadata_key]
             st.caption(metadata["label"])
