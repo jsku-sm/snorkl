@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import threading
 import time
+import uuid
 from cryptography.fernet import Fernet, InvalidToken
 import requests
 
@@ -16,7 +17,8 @@ class AppError(Exception):
 
 
 def blank():
-    return {"schema": 1, "users": {}, "classes": {}, "activities": {}, "attempts": {}, "login_failures": {}}
+    return {"schema": 1, "users": {}, "classes": {}, "activities": {}, "attempts": {}, "login_failures": {},
+            "courses": {}}
 
 
 class MemoryStore:
@@ -206,3 +208,55 @@ class GitHubStore:
             return self.fernet.decrypt(raw)
         except InvalidToken:
             raise AppError("이미지 암호화키가 일치하지 않습니다.") from None
+
+    def save_course_archive(self, course, archived_at):
+        archive_id = uuid.uuid4().hex
+        payload = {"id": archive_id, "archived_at": archived_at, "course": course}
+        raw = self.fernet.encrypt(json.dumps(payload, ensure_ascii=False).encode())
+        self._check_private()
+        response = self._put("course-archives/" + archive_id + ".json.enc", raw)
+        if response.status_code not in (200, 201):
+            raise AppError("수업 보관 파일을 GitHub에 저장하지 못했습니다. 토큰 쓰기 권한을 확인하세요.")
+        return archive_id
+
+    def list_course_archives(self):
+        self._check_private()
+        response = self._request(
+            "GET",
+            self.base + "/contents/" + self.PREFIX + "/course-archives",
+            params={"ref": self.branch},
+        )
+        if response.status_code == 404:
+            return []
+        if response.status_code != 200:
+            raise AppError("GitHub 보관 파일 목록을 읽지 못했습니다. 토큰 읽기 권한을 확인하세요.")
+        files = response.json()
+        if not isinstance(files, list):
+            raise AppError("GitHub 보관 파일 목록 형식이 올바르지 않습니다.")
+        archives = []
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name", "")
+            match = re.fullmatch(r"([a-f0-9]{32})\.json\.enc", name)
+            if not match:
+                continue
+            archive = self.get_course_archive(match.group(1))
+            archives.append(archive)
+        return sorted(archives, key=lambda archive: archive["archived_at"], reverse=True)
+
+    def get_course_archive(self, archive_id):
+        if not re.fullmatch(r"[a-f0-9]{32}", archive_id):
+            raise AppError("보관 파일 식별자가 올바르지 않습니다.")
+        raw, _ = self._get("course-archives/" + archive_id + ".json.enc")
+        if raw is None:
+            raise AppError("보관 파일을 찾을 수 없습니다.")
+        try:
+            payload = json.loads(self.fernet.decrypt(raw))
+        except (InvalidToken, ValueError, KeyError, TypeError):
+            raise AppError("보관 파일을 읽지 못했습니다. 암호화키와 파일 형식을 확인하세요.") from None
+        if (not isinstance(payload, dict) or payload.get("id") != archive_id
+                or not isinstance(payload.get("course"), dict)
+                or not isinstance(payload.get("archived_at"), str)):
+            raise AppError("보관 파일의 내용이 올바르지 않습니다.")
+        return payload

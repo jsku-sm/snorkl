@@ -1,9 +1,18 @@
 # 구쌤 · 생각을 말해요
 
-학생이 풀이를 쓰고, 그리고, 말하며 피드백을 받아 다시 도전하는 Streamlit 앱입니다.
-Snorkl의 학습 흐름을 참고해 독립적으로 만든 앱이며, Snorkl 제품이나 Snorkl의 AI 엔진을 연결한 것은 아닙니다.
+Snorkl 화면을 참고한 수업 관리용 Streamlit 대시보드입니다. Snorkl 제품이나 Snorkl의 AI 엔진을 연결한 것은 아닙니다.
 
-## 1. 구현된 다섯 가지 기능
+## 수업 관리 대시보드
+
+`streamlit_app.py`를 실행하면 로그인 없이 수업을 만들고, 수업 이름·색상·참여 대상(1반~7반)을 수정하고, 공유 링크와 QR 코드를 확인할 수 있습니다. 보관은 GitHub Private 저장소의 `think-learning-v1/course-archives/` 경로에 암호화 파일로 저장하며, **보관됨** 탭에서 다시 불러올 수 있습니다.
+
+로그인이 제거된 화면이므로 앱에 접근할 수 있는 사용자는 수업을 수정하거나 삭제할 수 있습니다. 실제 운영 전 Streamlit 앱 접근 권한을 제한하세요. GitHub 보관 기능에는 `THINK_MODE = "github"`와 기존 `GITHUB_REPO`, `GITHUB_TOKEN`, `ENCRYPTION_KEY` 설정이 필요합니다.
+
+## 기존 학습 앱 (`app.py`)
+
+기존 학생 풀이·교사 피드백 기능은 `app.py`에 유지되어 있습니다. 아래의 기능 설명과 로그인·AI 안내는 `app.py`에만 해당하며, 수업 관리 대시보드의 기능이 아닙니다.
+
+## 기존 앱의 다섯 가지 기능
 
 | 기능 | 앱에서 사용하는 곳 |
 |---|---|
@@ -16,32 +25,23 @@ Snorkl의 학습 흐름을 참고해 독립적으로 만든 앱이며, Snorkl �
 교사·학생 로그인, 교사 발급 학급 가입코드, 학생 비밀번호 변경, CSV 내보내기도 포함합니다.
 학생은 자신의 기록만 보고, 교사는 전체 과제와 제출물을 볼 수 있습니다.
 
-## 2. 지금 바로 체험하기
+## 기존 앱 체험하기
 
 압축을 풀고, 이 README와 `app.py`가 있는 폴더를 VS Code에서 여세요.
 터미널에서 아래 명령을 실행합니다. Mac에서 `python`이 없으면 `python3`를 사용하세요.
 
 ```bash
 python3 -m pip install -r requirements.txt
-python3 -m streamlit run app.py
+python3 -m streamlit run streamlit_app.py
 ```
 
-설정 파일이 없으면 **체험 모드**로 열립니다.
-
-1. **학생으로 체험하기** → 원의 방정식 예제에 설명 입력 → **설명 제출하기**
-2. 설명을 수정해 한 번 더 제출
-3. 왼쪽 **교사로 전환** → **제출·분석** → 학생 풀이와 두 번의 시도 확인
-4. 교사 판단·설명점수·피드백 저장 → 학생으로 전환해 교사 피드백 확인
-
-체험 모드의 기록은 **현재 브라우저 세션에만** 있습니다. 페이지 새로고침, 접속 종료 또는 서버 재시작 시 사라질 수 있습니다. 실제 학생 정보는 체험 모드에 입력하지 마세요.
-
-AI 키가 없으면 임의의 점수나 가짜 AI 피드백을 만들지 않습니다. 제출물은 저장되며 교사 피드백은 가능합니다. 음성 자동 전사와 AI 분석은 다음 설정 후 작동합니다.
+수업 관리 화면의 체험 모드는 앱 프로세스 메모리에 데이터를 둡니다. 서버를 재시작하면 사라지므로 지속적으로 저장하려면 `THINK_MODE = "github"`를 설정하세요.
 
 ## 3. GitHub에 올려 실제 운영하기
 
 ### A. 코드와 비공개 데이터 저장소
 
-- **코드 저장소**: 압축 파일 자체가 아니라 압축을 푼 파일과 폴더를 올립니다. `app.py`, `think_app/`, `requirements.txt`가 같은 위치에 있어야 합니다.
+- **코드 저장소**: 압축 파일 자체가 아니라 압축을 푼 파일과 폴더를 올립니다. `streamlit_app.py`, `think_app/`, `requirements.txt`가 같은 위치에 있어야 합니다.
 - **데이터 저장소**: 별도의 GitHub **Private** 저장소를 만들고 README를 추가해 `main` 브랜치를 생성합니다.
 - 데이터 저장소에만 접근하는 fine-grained token을 발급합니다. Repository permissions의 **Contents: Read and write**가 필요합니다.
 - 기존 비공개 데이터 저장소를 사용할 수도 있습니다. 이 앱은 `think-learning-v1/` 경로만 사용하며 기존 대시보드의 파일을 읽거나 덮어쓰지 않습니다.
@@ -59,11 +59,11 @@ python3 generate_key.py
 ### C. Streamlit 배포 설정
 
 1. Streamlit Community Cloud에서 코드 저장소를 연결합니다.
-2. Main file path는 **`app.py`**로 지정합니다.
+2. Main file path는 **`streamlit_app.py`**로 지정합니다.
 3. Python은 **3.11 또는 3.12**를 사용하세요. 이 패키지 검증 환경의 구체적인 버전은 `검증결과.md`에 적었습니다.
 4. 앱 설정의 **Secrets**에 `secrets.toml.example`의 내용을 복사하고 모든 예시 값을 실제 값으로 바꿉니다.
 5. `THINK_MODE = "github"`로 설정합니다.
-6. 앱 접근 범위는 학교 운영에 맞게 비공개로 설정합니다. Streamlit의 앱 접근 권한과 앱 안의 교사·학생 로그인은 별도입니다.
+6. 로그인 기능이 없으므로 앱 접근 범위를 학교 운영에 맞게 제한합니다.
 
 실제 키나 토큰이 들어간 파일은 GitHub에 올리지 않습니다. 로컬 실행 시에는 `.streamlit/secrets.toml`에 넣습니다. 해당 파일은 `.gitignore`에 포함되어 있습니다.
 
@@ -75,16 +75,9 @@ GITHUB_REPO = "본인아이디/비공개데이터저장소"
 GITHUB_BRANCH = "main"
 GITHUB_TOKEN = "발급한토큰"
 ENCRYPTION_KEY = "generate_key.py에서출력된키"
-THINK_TEACHER_ID = "teacher"
-THINK_TEACHER_PASSWORD = "직접정한10자이상비밀번호"
-
-AI_ENABLED = true
-OPENAI_API_KEY = "본인의OpenAI_API키"
-OPENAI_MODEL = "gpt-4.1-mini"
-TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 ```
 
-AI를 나중에 연결하려면 `AI_ENABLED = false`로 두고 AI 관련 나머지 항목을 비워도 됩니다. API 사용료는 해당 API 계정에 발생하며, 모델 사용 권한과 결제·요청 한도는 계정에 따라 다릅니다.
+GitHub 보관 파일은 같은 비공개 저장소 안의 `think-learning-v1/course-archives/`에 따로 저장됩니다. 파일 내용은 `ENCRYPTION_KEY`로 암호화됩니다.
 
 ### D. 교사와 학생의 첫 접속
 
